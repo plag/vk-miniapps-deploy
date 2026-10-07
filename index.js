@@ -17,6 +17,11 @@ prompt.delimiter = '=>'.grey;
 
 const DEBUG_MODE = !!cfg.debug;
 
+function formatDate(d = new Date()) {
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
 const API_HOST = cfg.api_host || 'https://api.vk.ru/method/';
 const OAUTH_HOST = cfg.oauth_host || 'https://oauth.vk.ru/';
 
@@ -182,7 +187,11 @@ async function api(method, params) {
     .join('&');
   try {
     const query = await fetch(API_HOST + method + '?' + queryParams);
-    const res = await query.json();
+    // const res = await query.json();
+    let resText = await query.text();
+    console.log('resText', resText);
+    const res = JSON.parse(resText);
+
     if (res.error !== void 0) {
       const errorCode = res.error.error_code;
       const errorMessage = chalk.red(errorCode + ': ' + res.error.error_msg);
@@ -218,6 +227,7 @@ async function api(method, params) {
   }
 }
 
+
 async function upload(uploadUrl, bundleFile) {
   const formData = new FormData();
   formData.append('file', fs.createReadStream(bundleFile), { contentType: 'application/zip' });
@@ -229,9 +239,13 @@ async function upload(uploadUrl, bundleFile) {
     });
     const response = await upload.json();
 
-    console.log('Storage response:', JSON.stringify(response, null, 2));
+    console.log(formatDate(), 'Storage response:', JSON.stringify(response, null, 2));
     console.log('sha:', response.sha);
     console.log('secret:', response.secret ? 'present' : 'missing');
+
+    if (response.error_code === 4603) {
+      throw new Error('Error 4603: ' + JSON.stringify(response));
+    }
 
     return response;
   } catch (e) {
@@ -486,7 +500,7 @@ async function run(cfg) {
     const uploadServer = await api('apps.getGoHostingUploadServer', params);
 
     if (!uploadServer || !uploadServer.upload_url) {
-      throw new Error(JSON.stringify('upload_url is undefined', r));
+      throw new Error(JSON.stringify('upload_url is undefined', uploadServer));
     }
 
     const uploadURL = uploadServer.upload_url;
@@ -505,7 +519,20 @@ async function run(cfg) {
       return false;
     }
 
-    const uploadResponse = await upload(uploadURL, bundleFile);
+    let uploadResponse;
+    for (let i = 0; i < 5; i += 1) {
+      try {
+        console.log(`${formatDate()} =====> Attempt ${i + 1}`);
+        uploadResponse = await upload(uploadURL, bundleFile);
+      } catch (e) {
+        console.error(`${formatDate()} =====>Attempt ${i + 1} failed:`, e);
+        if (i === 4) throw e;
+      }
+
+      if (uploadResponse) {
+        break;
+      }
+    }
 
     console.log('Upload response before base64:', JSON.stringify(uploadResponse, null, 2));
     console.log('sha in uploadResponse:', uploadResponse.sha);
